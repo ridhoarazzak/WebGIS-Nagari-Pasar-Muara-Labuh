@@ -17,6 +17,9 @@ html,body{margin:0;height:100%;font:14px system-ui,sans-serif}
 .row span{margin-left:auto;font-weight:600}
 .cat{font-size:11px;color:#777;margin:8px 0 0}
 .note{font-size:12px;color:#555;margin:6px 0}
+.pin{width:26px;height:26px;border-radius:50%;border:2px solid #fff;color:#fff;font:700 12px/22px system-ui;text-align:center;box-shadow:0 1px 4px #0008;cursor:pointer}
+.pin.k1{background:#d7191c}.pin.k2{background:#3366ff}
+.row.go{cursor:pointer}.pop a{color:#0b57d0}
 </style></head><body>
 <div id="map"></div>
 <div id="top">WebGIS Pasar Muara Labuh</div>
@@ -43,7 +46,18 @@ const LAYERS=[
  {id:'suhu',judul:'Suhu',file:'suhu_pol.geojson',warna:{1:'#FF0000'},
   note:'Citra siang Landsat 9 (2023-2024), ambang 30 °C. Menunjukkan area lebih panas, bukan suhu udara.'},
  {id:'bangunan',judul:'Bangunan',file:'bangunan.geojson',bangunan:true,warna:{},
-  note:'Open Buildings v3, keyakinan ≥ 0,7.'}
+  note:'Open Buildings v3, keyakinan ≥ 0,7.'},
+ {id:'dr_zona',judul:'Drainase: Zona',file:'drainase_zona.geojson',warna:{1:'#ffd400'},
+  note:'Zona prioritas drainase tinggi. Skor relatif, bobot belum dikalibrasi: indikasi, bukan bukti genangan.'},
+ {id:'dr_ruas',judul:'Drainase: Ruas',file:'drainase_ruas.geojson',nilai:'panjang_m',sat:'m',
+  warna:{1:'#a6d96a',2:'#fdae61',3:'#d7191c',4:'#3366ff'},
+  relatif:true,
+  note:'Ruas per 100 m (koridor 60 m). Tinggi/sedang/rendah dibandingkan antar ruas jalan (±sepertiga teratas = tinggi), bukan ambang mutlak. Biru = dekat sungai (±50 m): penanganan banjir sungai.'},
+ {id:'dr_potong',judul:'Drainase: Titik potong',file:'drainase_potong.geojson',titik:true,
+  warna:{1:'#ffffff',2:'#ff00ff'},
+  note:'Titik jalan memotong alur sungai. Magenta = kandidat gorong-gorong, putih = jembatan. Perlu dicek di lapangan.'},
+ {id:'dr_top',judul:'Drainase: Top 10',file:'drainase_top10.geojson',pin:true,warna:{1:'#d7191c',2:'#3366ff'},
+  note:'Merah = 10 ruas drainase jalan teratas, biru = 10 ruas dekat sungai teratas. Ketuk angka untuk detail dan tautan Google Maps. Urutan relatif, perlu dicek di lapangan.'}
 ];
 const $=id=>document.getElementById(id);
 let aktif=null;
@@ -53,6 +67,29 @@ const map=new maplibregl.Map({container:'map',center:[101.07,-1.477],zoom:13,sty
  layers:[{id:'sat',type:'raster',source:'sat'},{id:'osm',type:'raster',source:'osm',layout:{visibility:'none'}}]}});
 
 function warnaExpr(w){const e=['match',['to-string',['get','kelas']]];Object.keys(w).forEach(k=>e.push(k,w[k]));e.push('#999999');return e}
+
+function tingkat(d){
+ const sk=d.features.filter(f=>f.properties.kelas!==4).map(f=>+f.properties.skor_mean).sort((a,b)=>a-b);
+ const n=sk.length,t1=sk[Math.floor(n/3)],t2=sk[Math.floor(2*n/3)];
+ const nm={1:'Rendah',2:'Sedang',3:'Tinggi',4:'Dekat sungai'};
+ d.features.forEach(f=>{const p=f.properties;
+  if(p.kelas!==4)p.kelas=p.skor_mean>t2?3:p.skor_mean>=t1?2:1;
+  p.nama=nm[p.kelas]});
+}
+function buatPin(L){
+ L.markers=L.data.features.map(f=>{
+  const p=f.properties,el=document.createElement('div');
+  el.className='pin k'+p.kelas;el.textContent=p.urut;
+  const h=`<div class="pop"><b>#${p.urut} ${p.nama}</b><br>${p.jalan}<br>skor ${(+p.skor_mean).toFixed(2)} · ${Math.round(p.panjang_m)} m · ${p.jarak_sungai_m>=500?'≥500':Math.round(p.jarak_sungai_m)} m dari sungai<br><a href="${p.link}" target="_blank" rel="noopener">Buka di Google Maps</a></div>`;
+  return new maplibregl.Marker({element:el}).setLngLat(f.geometry.coordinates)
+   .setPopup(new maplibregl.Popup({offset:16}).setHTML(h));
+ });
+}
+function kePin(i){
+ const L=LAYERS.find(x=>x.id===aktif),m=L.markers[i];
+ map.flyTo({center:m.getLngLat(),zoom:17});
+ if(!m.getPopup().isOpen())m.togglePopup();
+}
 
 map.on('load',async()=>{
  try{
@@ -66,9 +103,14 @@ map.on('load',async()=>{
  for(const L of LAYERS){
   try{
    L.data=await (await fetch(BASE+L.file)).json();
+   if(L.relatif)tingkat(L.data);
+   if(L.pin){buatPin(L);continue}
    map.addSource(L.id,{type:'geojson',data:L.data});
-   map.addLayer({id:L.id,type:'fill',source:L.id,layout:{visibility:'none'},
-    paint:{'fill-color':L.bangunan?'#e74c3c':warnaExpr(L.warna),'fill-opacity':0.6}});
+   map.addLayer(L.titik
+    ?{id:L.id,type:'circle',source:L.id,layout:{visibility:'none'},
+      paint:{'circle-radius':7,'circle-color':warnaExpr(L.warna),'circle-stroke-color':'#000','circle-stroke-width':1.5,'circle-opacity':0.9}}
+    :{id:L.id,type:'fill',source:L.id,layout:{visibility:'none'},
+      paint:{'fill-color':L.bangunan?'#e74c3c':warnaExpr(L.warna),'fill-opacity':0.6}});
   }catch(e){L.error=true}
  }
  if(map.getSource('batas'))map.addLayer({id:'batas',type:'line',source:'batas',paint:{'line-color':'#fff','line-width':2.5}});
@@ -83,7 +125,11 @@ map.on('load',async()=>{
 
 function pilih(id){
  aktif=id;
- LAYERS.forEach(L=>{if(!L.error)map.setLayoutProperty(L.id,'visibility',L.id===id?'visible':'none')});
+ LAYERS.forEach(L=>{
+  if(L.error)return;
+  if(L.pin)L.markers.forEach(m=>L.id===id?m.addTo(map):m.remove());
+  else map.setLayoutProperty(L.id,'visibility',L.id===id?'visible':'none');
+ });
  document.querySelectorAll('.chip[data-id]').forEach(c=>c.classList.toggle('on',c.dataset.id===id));
  const L=LAYERS.find(x=>x.id===id);
  $('note').textContent=L.note||'';
@@ -93,24 +139,37 @@ function pilih(id){
   $('ringkas').innerHTML=`<b>${L.judul}</b><div class="row"><i style="background:#e74c3c"></i>Bangunan terdeteksi<span>${n} unit</span></div><div class="row">Total luas atap<span>${(m2/10000).toFixed(2)} ha</span></div>`;
   return;
  }
- const sum={};
+ if(L.pin){
+  const ur=L.data.features.map((f,i)=>({p:f.properties,i})).sort((a,b)=>a.p.kelas-b.p.kelas||a.p.urut-b.p.urut);
+  let k=0,h='<b>'+L.judul+'</b>';
+  ur.forEach(({p,i})=>{
+   if(p.kelas!==k){k=p.kelas;h+=`<div class="note"><b>${p.nama}</b></div>`}
+   h+=`<div class="row go" onclick="kePin(${i})"><i style="background:${L.warna[p.kelas]}"></i>${p.urut}. ${p.jalan}<span>${(+p.skor_mean).toFixed(2)}</span></div>`;
+  });
+  $('ringkas').innerHTML=h;return;
+ }
+ const nk=L.nilai||'luas_ha',sat=L.sat||'ha',sum={};
  L.data.features.forEach(f=>{const p=f.properties,k=p.kelas;
-  sum[k]=sum[k]||{nama:p.nama||('Kelas '+k),ha:0};sum[k].ha+=+p.luas_ha||0});
+  sum[k]=sum[k]||{nama:p.nama||('Kelas '+k),v:0};sum[k].v+=L.titik?1:(+p[nk]||0)});
+ const fmt=v=>L.titik?v+' titik':(sat==='m'?Math.round(v)+' m':v.toFixed(1)+' '+sat);
  $('ringkas').innerHTML='<b>'+L.judul+'</b>'+Object.keys(sum).map(k=>
-  `<div class="row"><i style="background:${L.warna[k]||'#999'}"></i>${sum[k].nama}<span>${sum[k].ha.toFixed(1)} ha</span></div>`).join('');
+  `<div class="row"><i style="background:${L.warna[k]||'#999'}"></i>${sum[k].nama}<span>${fmt(sum[k].v)}</span></div>`).join('');
 }
 
 map.on('click',e=>{
- if(!aktif)return;
+ if(!aktif||LAYERS.find(x=>x.id===aktif).pin)return;
  const f=map.queryRenderedFeatures(e.point,{layers:[aktif]})[0];
  if(!f)return;
  const p=f.properties;
  const h=p.area_in_meters!==undefined
   ?`<b>Bangunan</b><br>${(+p.area_in_meters).toFixed(0)} m²<br>keyakinan ${(+p.confidence).toFixed(2)}`
-  :`<b>${p.nama}</b><br>${(+p.luas_ha).toFixed(2)} ha`;
+  :`<b>${p.zona||p.nama}</b>`+(p.jalan?`<br>${p.jalan}`:'')
+   +(p.skor_mean!==undefined?`<br>skor ${(+p.skor_mean).toFixed(2)}`:'')
+   +(p.panjang_m!==undefined?`<br>${Math.round(p.panjang_m)} m`:'')
+   +(p.luas_ha!==undefined?`<br>${(+p.luas_ha).toFixed(2)} ha`:'');
  new maplibregl.Popup().setLngLat(e.lngLat).setHTML(h).addTo(map);
 });
-$('op').oninput=e=>LAYERS.forEach(L=>!L.error&&map.setPaintProperty(L.id,'fill-opacity',+e.target.value));
+$('op').oninput=e=>LAYERS.forEach(L=>!L.error&&!L.pin&&map.setPaintProperty(L.id,L.titik?'circle-opacity':'fill-opacity',+e.target.value));
 $('bm').onclick=()=>{
  const s=map.getLayoutProperty('sat','visibility')!=='none';
  map.setLayoutProperty('sat','visibility',s?'none':'visible');
