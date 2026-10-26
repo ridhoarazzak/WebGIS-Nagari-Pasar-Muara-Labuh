@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="id"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WebGIS Pasar Muara Labuh</title>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>
+html,body{margin:0;height:100%;font:14px system-ui,sans-serif}
+#map{position:absolute;inset:0}
+#top{position:absolute;top:8px;left:8px;right:8px;background:#fffd;padding:8px 12px;border-radius:10px;font-weight:600}
+#sheet{position:absolute;left:0;right:0;bottom:0;max-height:42%;overflow:auto;background:#fff;border-radius:16px 16px 0 0;box-shadow:0 -2px 12px #0004;padding:10px 14px}
+.chip{border:1px solid #bbb;background:#fff;border-radius:16px;padding:5px 10px;margin:2px;font-size:13px}
+.chip.on{background:#2c3e50;color:#fff}.chip:disabled{opacity:.4}
+.row{display:flex;align-items:center;gap:8px;margin:5px 0}
+.row i{width:16px;height:16px;border:1px solid #888;display:inline-block}
+.row span{margin-left:auto;font-weight:600}
+.cat{font-size:11px;color:#777;margin:8px 0 0}
+.note{font-size:12px;color:#555;margin:6px 0}
+</style></head><body>
+<div id="map"></div>
+<div id="top">WebGIS Pasar Muara Labuh</div>
+<div id="sheet">
+ <div id="chips"></div>
+ <div id="ringkas"></div>
+ <div id="note" class="note"></div>
+ <label>Kepekatan <input id="op" type="range" min="0.1" max="1" step="0.05" value="0.6"></label>
+ <button id="bm" class="chip">Ganti peta dasar</button>
+ <p class="cat">Indikasi/estimasi dari data satelit, bukan data resmi pemerintah.</p>
+</div>
+<script>
+const BASE='data/';
+const BATAS='batas_nagari.geojson';
+const LAYERS=[
+ {id:'potensi',judul:'Potensi',file:'potensi_pol.geojson',warna:{1:'#00FFFF',2:'#76FF03',3:'#FF00FF'},
+  note:'Hasil baca warna peta potensi; luas dihitung dari poligon.'},
+ {id:'komoditas',judul:'Komoditas',file:'komoditas_pol.geojson',warna:{1:'#FFA500',2:'#8B4513',3:'#FF0000'},
+  note:'Ambang warna bersifat perkiraan; luas kecil, baca sebagai indikasi awal.'},
+ {id:'banjir',judul:'Banjir',file:'banjir_pol.geojson',warna:{1:'#FF0000',2:'#FFA500',3:'#FFFF00'},
+  note:'Tiga tingkat risiko dari peta risiko banjir; bukan data resmi kebencanaan.'},
+ {id:'ekonomi',judul:'Ekonomi',file:'ekonomi_pol.geojson',warna:{1:'#34495e',2:'#0000FF',3:'#f1c40f'},
+  note:'Cahaya malam, relatif terhadap Kab. Solok Selatan. Piksel satelit ±500 m, jadi seluruh nagari jatuh di satu zona.'},
+ {id:'suhu',judul:'Suhu',file:'suhu_pol.geojson',warna:{1:'#FF0000'},
+  note:'Citra siang Landsat 9 (2023-2024), ambang 30 °C. Menunjukkan area lebih panas, bukan suhu udara.'},
+ {id:'bangunan',judul:'Bangunan',file:'bangunan.geojson',bangunan:true,warna:{},
+  note:'Open Buildings v3, keyakinan ≥ 0,7.'}
+];
+const $=id=>document.getElementById(id);
+let aktif=null;
+const map=new maplibregl.Map({container:'map',center:[101.07,-1.477],zoom:13,style:{version:8,sources:{
+ sat:{type:'raster',tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],tileSize:256,attribution:'Esri World Imagery'},
+ osm:{type:'raster',tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],tileSize:256,attribution:'© OpenStreetMap'}},
+ layers:[{id:'sat',type:'raster',source:'sat'},{id:'osm',type:'raster',source:'osm',layout:{visibility:'none'}}]}});
+
+function warnaExpr(w){const e=['match',['to-string',['get','kelas']]];Object.keys(w).forEach(k=>e.push(k,w[k]));e.push('#999999');return e}
+
+map.on('load',async()=>{
+ try{
+  const b=await (await fetch(BASE+BATAS)).json();
+  map.addSource('batas',{type:'geojson',data:b});
+  const bb=new maplibregl.LngLatBounds();
+  const walk=c=>typeof c[0]==='number'?bb.extend(c):c.forEach(walk);
+  b.features.forEach(f=>walk(f.geometry.coordinates));
+  map.fitBounds(bb,{padding:40,animate:false});
+ }catch(e){}
+ for(const L of LAYERS){
+  try{
+   L.data=await (await fetch(BASE+L.file)).json();
+   map.addSource(L.id,{type:'geojson',data:L.data});
+   map.addLayer({id:L.id,type:'fill',source:L.id,layout:{visibility:'none'},
+    paint:{'fill-color':L.bangunan?'#e74c3c':warnaExpr(L.warna),'fill-opacity':0.6}});
+  }catch(e){L.error=true}
+ }
+ if(map.getSource('batas'))map.addLayer({id:'batas',type:'line',source:'batas',paint:{'line-color':'#fff','line-width':2.5}});
+ LAYERS.forEach(L=>{
+  const b=document.createElement('button');
+  b.className='chip';b.dataset.id=L.id;b.textContent=L.judul;b.disabled=!!L.error;
+  b.onclick=()=>pilih(L.id);$('chips').appendChild(b);
+ });
+ const p=LAYERS.find(L=>!L.error);
+ if(p)pilih(p.id);else $('ringkas').textContent='Data belum termuat. Cek nama file di LAYERS.';
+});
+
+function pilih(id){
+ aktif=id;
+ LAYERS.forEach(L=>{if(!L.error)map.setLayoutProperty(L.id,'visibility',L.id===id?'visible':'none')});
+ document.querySelectorAll('.chip[data-id]').forEach(c=>c.classList.toggle('on',c.dataset.id===id));
+ const L=LAYERS.find(x=>x.id===id);
+ $('note').textContent=L.note||'';
+ if(L.bangunan){
+  const n=L.data.features.length;
+  const m2=L.data.features.reduce((s,f)=>s+(+f.properties.area_in_meters||0),0);
+  $('ringkas').innerHTML=`<b>${L.judul}</b><div class="row"><i style="background:#e74c3c"></i>Bangunan terdeteksi<span>${n} unit</span></div><div class="row">Total luas atap<span>${(m2/10000).toFixed(2)} ha</span></div>`;
+  return;
+ }
+ const sum={};
+ L.data.features.forEach(f=>{const p=f.properties,k=p.kelas;
+  sum[k]=sum[k]||{nama:p.nama||('Kelas '+k),ha:0};sum[k].ha+=+p.luas_ha||0});
+ $('ringkas').innerHTML='<b>'+L.judul+'</b>'+Object.keys(sum).map(k=>
+  `<div class="row"><i style="background:${L.warna[k]||'#999'}"></i>${sum[k].nama}<span>${sum[k].ha.toFixed(1)} ha</span></div>`).join('');
+}
+
+map.on('click',e=>{
+ if(!aktif)return;
+ const f=map.queryRenderedFeatures(e.point,{layers:[aktif]})[0];
+ if(!f)return;
+ const p=f.properties;
+ const h=p.area_in_meters!==undefined
+  ?`<b>Bangunan</b><br>${(+p.area_in_meters).toFixed(0)} m²<br>keyakinan ${(+p.confidence).toFixed(2)}`
+  :`<b>${p.nama}</b><br>${(+p.luas_ha).toFixed(2)} ha`;
+ new maplibregl.Popup().setLngLat(e.lngLat).setHTML(h).addTo(map);
+});
+$('op').oninput=e=>LAYERS.forEach(L=>!L.error&&map.setPaintProperty(L.id,'fill-opacity',+e.target.value));
+$('bm').onclick=()=>{
+ const s=map.getLayoutProperty('sat','visibility')!=='none';
+ map.setLayoutProperty('sat','visibility',s?'none':'visible');
+ map.setLayoutProperty('osm','visibility',s?'visible':'none');
+};
+</script></body></html>
