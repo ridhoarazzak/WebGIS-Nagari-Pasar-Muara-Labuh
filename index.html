@@ -27,6 +27,7 @@ html,body{margin:0;height:100%;font:14px system-ui,sans-serif}
  <div id="chips"></div>
  <div id="ringkas"></div>
  <div id="note" class="note"></div>
+ <div id="vid"></div>
  <label>Kepekatan <input id="op" type="range" min="0.1" max="1" step="0.05" value="0.6"></label>
  <button id="bm" class="chip">Ganti peta dasar</button>
  <p class="cat">Indikasi/estimasi dari data satelit, bukan data resmi pemerintah.</p>
@@ -47,6 +48,9 @@ const LAYERS=[
   note:'Citra siang Landsat 9 (2023-2024), ambang 30 °C. Menunjukkan area lebih panas, bukan suhu udara.'},
  {id:'bangunan',judul:'Bangunan',file:'bangunan.geojson',bangunan:true,warna:{},
   note:'Open Buildings v3, keyakinan ≥ 0,7.'},
+ {id:'lulc',judul:'LULC',file:'lulc_2025_pol.geojson',video:'timelapse_lulc.mp4',
+  warna:{1:'#419BDF',2:'#397D49',3:'#88B053',4:'#7A87C6',5:'#E49635',6:'#DFC35A',7:'#C4281B',8:'#A59B8F'},
+  note:'Dynamic World (Sentinel-2, 10 m), tutupan lahan 2025. Hasil model otomatis, belum divalidasi lapangan. Video di bawah: perubahan tahunan.'},
  {id:'dr_zona',judul:'Drainase: Zona',file:'drainase_zona.geojson',warna:{1:'#ffd400'},
   note:'Zona prioritas drainase tinggi. Skor relatif, bobot belum dikalibrasi: indikasi, bukan bukti genangan.'},
  {id:'dr_ruas',judul:'Drainase: Ruas',file:'drainase_ruas.geojson',nilai:'panjang_m',sat:'m',
@@ -133,6 +137,7 @@ function pilih(id){
  document.querySelectorAll('.chip[data-id]').forEach(c=>c.classList.toggle('on',c.dataset.id===id));
  const L=LAYERS.find(x=>x.id===id);
  $('note').textContent=L.note||'';
+ $('vid').innerHTML=L.video?`<video src="${BASE+L.video}" controls loop muted playsinline preload="metadata" style="width:100%;border-radius:8px;background:#000"></video>`:'';
  if(L.bangunan){
   const n=L.data.features.length;
   const m2=L.data.features.reduce((s,f)=>s+(+f.properties.area_in_meters||0),0);
