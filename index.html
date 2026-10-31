@@ -20,9 +20,17 @@ html,body{margin:0;height:100%;font:14px system-ui,sans-serif}
 .pin{width:26px;height:26px;border-radius:50%;border:2px solid #fff;color:#fff;font:700 12px/22px system-ui;text-align:center;box-shadow:0 1px 4px #0008;cursor:pointer}
 .pin.k1{background:#d7191c}.pin.k2{background:#3366ff}
 .row.go{cursor:pointer}.pop a{color:#0b57d0}
+#fab{position:absolute;top:58px;right:8px;display:flex;flex-direction:column;gap:6px}
+#fab button{border:0;border-radius:12px;background:#fffe;padding:9px 12px;font:600 13px system-ui;box-shadow:0 1px 6px #0006;min-width:56px}
+#fab button.on{background:#2c3e50;color:#fff}
 </style></head><body>
 <div id="map"></div>
 <div id="top">WebGIS Pasar Muara Labuh</div>
+<div id="fab">
+ <button id="b3d" class="on">3D</button>
+ <button id="bputar">Putar</button>
+ <button id="bulang">Ulang</button>
+</div>
 <div id="sheet">
  <div id="chips"></div>
  <div id="ringkas"></div>
@@ -50,7 +58,7 @@ const LAYERS=[
  {id:'suhu',judul:'Suhu',file:'suhu_pol.geojson',warna:{1:'#FF0000'},
   note:'Citra siang Landsat 9 (2023-2024), ambang 30 °C. Menunjukkan area lebih panas, bukan suhu udara.'},
  {id:'bangunan',judul:'Bangunan',file:'bangunan.geojson',bangunan:true,warna:{},
-  note:'Open Buildings v3, keyakinan ≥ 0,7.'},
+  note:'Open Buildings v3, keyakinan ≥ 0,7. Tinggi balok di tampilan 3D hanya simbolis (rumah kecil lebih pendek), bukan tinggi bangunan sebenarnya.'},
  {id:'lulc',judul:'LULC',file:'lulc_2025_pol.geojson',video:'timelapse_lulc.mp4',
   warna:{1:'#419BDF',2:'#397D49',3:'#88B053',4:'#7A87C6',5:'#E49635',6:'#DFC35A',7:'#C4281B',8:'#A59B8F'},
   note:'Dynamic World (Sentinel-2, 10 m), tutupan lahan 2025. Hasil model otomatis, belum divalidasi lapangan. Video di bawah: perubahan tahunan.'},
@@ -67,11 +75,13 @@ const LAYERS=[
   note:'Merah = 10 ruas drainase jalan teratas, biru = 10 ruas dekat sungai teratas. Ketuk angka untuk detail dan tautan Google Maps. Urutan relatif, perlu dicek di lapangan.'}
 ];
 const $=id=>document.getElementById(id);
-let aktif=null;
-const map=new maplibregl.Map({container:'map',center:[101.07,-1.477],zoom:13,style:{version:8,sources:{
+let aktif=null,home=null,mode3d=true,orbit=false;
+const map=new maplibregl.Map({container:'map',center:[101.07,-1.477],zoom:13,maxPitch:75,style:{version:8,sources:{
+ dem:{type:'raster-dem',tiles:['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],encoding:'terrarium',tileSize:256,maxzoom:14,attribution:'Elevasi: AWS Terrain Tiles'},
  sat:{type:'raster',tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],tileSize:256,attribution:'Esri World Imagery'},
  osm:{type:'raster',tiles:['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],tileSize:256,attribution:'© OpenStreetMap'}},
- layers:[{id:'sat',type:'raster',source:'sat'},{id:'osm',type:'raster',source:'osm',layout:{visibility:'none'}}]}});
+ layers:[{id:'sat',type:'raster',source:'sat'},{id:'osm',type:'raster',source:'osm',layout:{visibility:'none'}}],
+ terrain:{source:'dem',exaggeration:1.4}}});
 
 function warnaExpr(w){const e=['match',['to-string',['get','kelas']]];Object.keys(w).forEach(k=>e.push(k,w[k]));e.push('#999999');return e}
 
@@ -94,7 +104,7 @@ function buatPin(L){
 }
 function kePin(i){
  const L=LAYERS.find(x=>x.id===aktif),m=L.markers[i];
- map.flyTo({center:m.getLngLat(),zoom:17});
+ map.flyTo({center:m.getLngLat(),zoom:17,pitch:mode3d?60:0});
  if(!m.getPopup().isOpen())m.togglePopup();
 }
 
@@ -105,7 +115,8 @@ map.on('load',async()=>{
   const bb=new maplibregl.LngLatBounds();
   const walk=c=>typeof c[0]==='number'?bb.extend(c):c.forEach(walk);
   b.features.forEach(f=>walk(f.geometry.coordinates));
-  map.fitBounds(bb,{padding:40,animate:false});
+  map.fitBounds(bb,{padding:{top:60,bottom:220,left:30,right:30},animate:false});
+  home={center:map.getCenter(),zoom:map.getZoom()};
  }catch(e){}
  for(const L of LAYERS){
   try{
@@ -113,7 +124,11 @@ map.on('load',async()=>{
    if(L.relatif)tingkat(L.data);
    if(L.pin){buatPin(L);continue}
    map.addSource(L.id,{type:'geojson',data:L.data});
-   map.addLayer(L.titik
+   map.addLayer(L.bangunan
+    ?{id:L.id,type:'fill-extrusion',source:L.id,layout:{visibility:'none'},
+      paint:{'fill-extrusion-color':'#e74c3c','fill-extrusion-opacity':0.85,
+       'fill-extrusion-height':['interpolate',['linear'],['coalesce',['get','area_in_meters'],40],20,3,300,8]}}
+    :L.titik
     ?{id:L.id,type:'circle',source:L.id,layout:{visibility:'none'},
       paint:{'circle-radius':7,'circle-color':warnaExpr(L.warna),'circle-stroke-color':'#000','circle-stroke-width':1.5,'circle-opacity':0.9}}
     :{id:L.id,type:'fill',source:L.id,layout:{visibility:'none'},
@@ -128,7 +143,40 @@ map.on('load',async()=>{
  });
  const p=LAYERS.find(L=>!L.error);
  if(p)pilih(p.id);else $('ringkas').textContent='Data belum termuat. Cek nama file di LAYERS.';
+ intro();
 });
+
+/* ===== Animasi 3D ===== */
+const kurangGerak=matchMedia('(prefers-reduced-motion: reduce)').matches;
+function intro(){
+ if(!home)return;
+ stopPutar();
+ if(kurangGerak){map.jumpTo({center:home.center,zoom:home.zoom,pitch:mode3d?60:0,bearing:0});return}
+ map.jumpTo({center:home.center,zoom:home.zoom-2.5,pitch:0,bearing:0});
+ map.flyTo({center:home.center,zoom:home.zoom+0.2,pitch:mode3d?62:0,bearing:mode3d?-25:0,duration:7000,curve:1.4,essential:false});
+}
+function putar(){
+ if(!orbit)return;
+ map.setBearing((map.getBearing()+0.12)%360);
+ requestAnimationFrame(putar);
+}
+function stopPutar(){orbit=false;$('bputar').classList.remove('on')}
+$('b3d').onclick=()=>{
+ mode3d=!mode3d;
+ $('b3d').classList.toggle('on',mode3d);$('b3d').textContent=mode3d?'3D':'2D';
+ map.setTerrain(mode3d?{source:'dem',exaggeration:1.4}:null);
+ map.easeTo({pitch:mode3d?60:0,bearing:mode3d?map.getBearing():0,duration:1200});
+ if(!mode3d)stopPutar();
+};
+$('bputar').onclick=()=>{
+ if(orbit){stopPutar();return}
+ if(!mode3d)$('b3d').click();
+ orbit=true;$('bputar').classList.add('on');
+ map.easeTo({pitch:65,duration:800});
+ setTimeout(()=>requestAnimationFrame(putar),800);
+};
+$('bulang').onclick=intro;
+['mousedown','touchstart','wheel'].forEach(ev=>map.on(ev,()=>{if(orbit)stopPutar()}));
 
 function pilih(id){
  aktif=id;
@@ -177,10 +225,11 @@ map.on('click',e=>{
    +(p.luas_ha!==undefined?`<br>${(+p.luas_ha).toFixed(2)} ha`:'');
  new maplibregl.Popup().setLngLat(e.lngLat).setHTML(h).addTo(map);
 });
-$('op').oninput=e=>LAYERS.forEach(L=>!L.error&&!L.pin&&map.setPaintProperty(L.id,L.titik?'circle-opacity':'fill-opacity',+e.target.value));
+$('op').oninput=e=>LAYERS.forEach(L=>!L.error&&!L.pin&&map.setPaintProperty(L.id,L.bangunan?'fill-extrusion-opacity':L.titik?'circle-opacity':'fill-opacity',+e.target.value));
 $('bm').onclick=()=>{
  const s=map.getLayoutProperty('sat','visibility')!=='none';
  map.setLayoutProperty('sat','visibility',s?'none':'visible');
  map.setLayoutProperty('osm','visibility',s?'visible':'none');
 };
 </script></body></html>
+ 
